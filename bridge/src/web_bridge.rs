@@ -32,7 +32,7 @@ use tracing::{debug, info, warn};
 
 use herdr_compat::api::client::{ApiClient, ApiClientError};
 use herdr_compat::api::schema::{
-    AgentStartParams, AgentStatus, EmptyParams, EventsSubscribeParams, LayoutApplyParams,
+    AgentStatus, EmptyParams, EventsSubscribeParams, LayoutApplyParams,
     LayoutExportParams, Method, PaneInfo, PaneLayoutSnapshot, PaneListParams, PaneMoveDestination,
     PaneSplitParams, Request, ResponseResult, SessionSnapshot, SplitDirection, Subscription,
     SubscriptionEventData, SubscriptionEventEnvelope, SubscriptionEventKind, TabCreateParams,
@@ -1923,9 +1923,11 @@ fn launch_preset_blocking(
             }
             if preset.is_builtin_shell() {
                 launch_builtin_shell_split(api, preset, title, target_pane_id, direction)
-            } else if preset.agent_hint.is_some() {
-                launch_agent_split(api, preset, title, tab_id, direction)
             } else {
+                // Herdr >= 0.7.5 (protocol 17) changed agent.start to attach an
+                // agent to an existing pane instead of creating a split, so
+                // agent-hint presets launch through the layout split path like
+                // every other command preset.
                 launch_layout_split(api, preset, title, tab_id, target_pane_id, direction)
             }
         }
@@ -2007,46 +2009,6 @@ fn launch_builtin_shell_split(
         workspace_id: pane.workspace_id,
         tab_id: pane.tab_id,
         pane_id: pane.pane_id,
-    })
-}
-
-fn launch_agent_split(
-    api: &ApiClient,
-    preset: &ResolvedLauncherPreset,
-    title: &str,
-    tab_id: String,
-    direction: SplitDirection,
-) -> Result<LauncherPresetLaunchResponse, LauncherPresetError> {
-    let argv = preset
-        .argv
-        .clone()
-        .ok_or_else(|| LauncherPresetError::invalid("preset argv is required"))?;
-    let result = api_request(
-        api,
-        "herdr-web:launcher:agent-split",
-        Method::AgentStart(AgentStartParams {
-            name: title.into(),
-            cwd: preset.cwd.clone(),
-            workspace_id: None,
-            tab_id: Some(tab_id),
-            split: Some(direction),
-            focus: true,
-            argv,
-            env: preset.launch_env(),
-        }),
-    )
-    .map_err(|err| LauncherPresetError::launch_failed(err.to_string()))?;
-    let ResponseResult::AgentStarted { agent, .. } = result else {
-        return Err(LauncherPresetError::launch_failed(
-            "unexpected response for agent split launch",
-        ));
-    };
-    Ok(LauncherPresetLaunchResponse {
-        preset_id: preset.id.clone(),
-        title: title.into(),
-        workspace_id: agent.workspace_id,
-        tab_id: agent.tab_id,
-        pane_id: agent.pane_id,
     })
 }
 
@@ -3682,7 +3644,8 @@ fn activity_message_from_subscription_value(value: serde_json::Value) -> Option<
         agent: event.agent,
         title: event.title,
         display_agent: event.display_agent,
-        custom_status: event.custom_status,
+        // Herdr >= 0.7.5 removed custom_status from pane agent status events.
+        custom_status: None,
         state_labels: event.state_labels,
     })
 }
@@ -4971,7 +4934,9 @@ mod tests {
             title: None,
             display_agent: None,
             agent_status: AgentStatus::Idle,
-            custom_status: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            tokens: HashMap::new(),
             state_labels: HashMap::new(),
             agent_session: None,
             scroll: None,
