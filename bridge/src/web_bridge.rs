@@ -33,7 +33,8 @@ use tracing::{debug, info, warn};
 use herdr_compat::api::client::{ApiClient, ApiClientError};
 use herdr_compat::api::schema::{
     AgentStatus, EmptyParams, EventsSubscribeParams, LayoutApplyParams,
-    LayoutExportParams, Method, PaneInfo, PaneLayoutSnapshot, PaneListParams, PaneMoveDestination,
+    LayoutExportParams, Method, PaneInfo, PaneLayoutParams, PaneLayoutSnapshot, PaneListParams,
+    PaneMoveDestination,
     PaneSplitParams, Request, ResponseResult, SessionSnapshot, SplitDirection, Subscription,
     SubscriptionEventData, SubscriptionEventEnvelope, SubscriptionEventKind, TabCreateParams,
     TabInfo, TabListParams, WorkspaceInfo,
@@ -3029,7 +3030,24 @@ async fn handle_terminal_socket(socket: WebSocket, state: BridgeState, query: Te
         }
     }
 
-    release_terminal_session(&state.terminal_sessions, &terminal_id, &session);
+    // Fetched only now, when this viewer is leaving: a fresh layout at release
+    // time survives splits/moves made while the viewer was attached, where a
+    // size captured at attach would restore stale geometry. If we turn out not
+    // to be the last client, release ignores the value.
+    let restore_size = tokio::task::spawn_blocking({
+        let api = state.api.clone();
+        let terminal_id = terminal_id.clone();
+        move || terminal_home_size(&api, &terminal_id)
+    })
+    .await
+    .ok()
+    .flatten();
+    release_terminal_session(
+        &state.terminal_sessions,
+        &terminal_id,
+        &session,
+        restore_size,
+    );
 }
 
 async fn handle_terminal_output_deadline(
@@ -3292,10 +3310,46 @@ async fn acquire_terminal_session(
     .map_err(|err| BridgeError::Protocol(err.to_string()))?
 }
 
+/// The size a terminal should return to once no web viewer is looking at it:
+/// the rect its pane occupies in the daemon's OWN layout, minus the one-column
+/// separator (grid width 138 renders a 137-col PTY — verified against a live
+/// daemon; an off-by-one here costs one column, not a phone-shaped pane).
+///
+/// Exists because the daemon keeps the LAST-asserted terminal size after a
+/// client detaches. A phone viewer that vanishes without this restore leaves
+/// every native view of that pane wedged at phone dimensions until some other
+/// client happens to assert a size — observed live 2026-07-28, when a
+/// backgrounded phone PWA held a 138x50 pane at 72x34 through a bridge restart
+/// (the PWA reconnects) and past its own closing.
+fn terminal_home_size(api: &ApiClient, terminal_id: &str) -> Option<(u16, u16)> {
+    let panes = current_panes(api).ok()?;
+    let pane = panes
+        .iter()
+        .find(|pane| pane.terminal_id == terminal_id)?;
+    let response = api_request(
+        api,
+        "herdr-web:pane-layout",
+        Method::PaneLayout(PaneLayoutParams {
+            pane_id: Some(pane.pane_id.clone()),
+        }),
+    )
+    .ok()?;
+    let ResponseResult::PaneLayout { layout } = response else {
+        return None;
+    };
+    let rect = &layout
+        .panes
+        .iter()
+        .find(|entry| entry.pane_id == pane.pane_id)?
+        .rect;
+    Some((rect.width.saturating_sub(1).max(2), rect.height.max(2)))
+}
+
 fn release_terminal_session(
     sessions: &Mutex<TerminalSessions>,
     terminal_id: &str,
     session: &SharedTerminalSession,
+    restore_size: Option<(u16, u16)>,
 ) {
     // Decrement while holding the map lock so a concurrent acquire cannot
     // join the session between the last-client check and its removal.
@@ -3306,6 +3360,17 @@ fn release_terminal_session(
         return;
     }
 
+    // Last viewer out restores the daemon's own size BEFORE detaching, so the
+    // ordering on the wire is Resize then Detach and the pane never stays
+    // phone-shaped for whoever looks at it next (see terminal_home_size).
+    if let Some((cols, rows)) = restore_size {
+        let _ = session.write_tx.send(ClientMessage::Resize {
+            cols,
+            rows,
+            cell_width_px: 0,
+            cell_height_px: 0,
+        });
+    }
     let _ = session.write_tx.send(ClientMessage::Detach);
     if sessions
         .active
@@ -4382,6 +4447,56 @@ mod tests {
     }
 
     #[test]
+    fn releasing_last_client_restores_home_size_before_detaching() {
+        // The 2026-07-28 incident, as a contract: a phone viewer detaching must
+        // not leave the daemon on the phone's size. Resize-then-Detach, in that
+        // order — a Resize after Detach would reach a torn-down connection.
+        let (session, rx) = test_shared_terminal_session();
+        let sessions = Mutex::new(TerminalSessions::default());
+        sessions
+            .lock()
+            .unwrap()
+            .active
+            .insert("term-1".to_string(), session.clone());
+
+        release_terminal_session(&sessions, "term-1", &session, Some((137, 50)));
+
+        let frames: Vec<ClientMessage> = rx.try_iter().collect();
+        assert_eq!(
+            frames,
+            vec![
+                ClientMessage::Resize {
+                    cols: 137,
+                    rows: 50,
+                    cell_width_px: 0,
+                    cell_height_px: 0,
+                },
+                ClientMessage::Detach,
+            ]
+        );
+    }
+
+    #[test]
+    fn releasing_a_non_last_client_neither_resizes_nor_detaches() {
+        // The restore is a last-viewer duty. While another web client is still
+        // attached, ITS viewport governs — a departing second viewer that
+        // reasserted the layout size would yank the survivor's terminal.
+        let (session, rx) = test_shared_terminal_session();
+        session.client_count.store(2, Ordering::Release);
+        let sessions = Mutex::new(TerminalSessions::default());
+        sessions
+            .lock()
+            .unwrap()
+            .active
+            .insert("term-1".to_string(), session.clone());
+
+        release_terminal_session(&sessions, "term-1", &session, Some((137, 50)));
+
+        assert_eq!(rx.try_iter().count(), 0, "no frame may be sent");
+        assert!(sessions.lock().unwrap().active.contains_key("term-1"));
+    }
+
+    #[test]
     fn releasing_last_client_detaches_and_records_draining_connection() {
         let (session, rx) = test_shared_terminal_session();
         let sessions = Mutex::new(TerminalSessions::default());
@@ -4391,7 +4506,7 @@ mod tests {
             .active
             .insert("term-1".to_string(), session.clone());
 
-        release_terminal_session(&sessions, "term-1", &session);
+        release_terminal_session(&sessions, "term-1", &session, None);
 
         let map = sessions.lock().unwrap();
         assert!(map.active.is_empty());
@@ -4413,7 +4528,7 @@ mod tests {
             .active
             .insert("term-1".to_string(), session.clone());
 
-        release_terminal_session(&sessions, "term-1", &session);
+        release_terminal_session(&sessions, "term-1", &session, None);
 
         let map = sessions.lock().unwrap();
         assert!(map.active.contains_key("term-1"));
@@ -4432,7 +4547,7 @@ mod tests {
             .active
             .insert("term-1".to_string(), session.clone());
 
-        release_terminal_session(&sessions, "term-1", &session);
+        release_terminal_session(&sessions, "term-1", &session, None);
 
         let map = sessions.lock().unwrap();
         assert!(map.active.is_empty());
