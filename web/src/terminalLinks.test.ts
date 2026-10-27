@@ -105,4 +105,9 @@ describe("collectRecentLinks", () => {
     ]);
     expect(collectRecentLinks(rows, 80)).toEqual(["https://one.example/a", "https://two.example/b"]);
   });
+
+  it("drops a URL that is a truncated prefix of another listed URL", () => {
+    const rows = hard(["https://example.org/a/b/seg", "x", "https://example.org/a/b/segment-three"]);
+    expect(collectRecentLinks(rows, 80)).toEqual(["https://example.org/a/b/segment-three"]);
+  });
 });
