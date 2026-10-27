@@ -3,9 +3,10 @@ import {
   findFirstUrlInSelection,
   terminalSelectionRange,
   terminalUrlTapTarget,
-  trimUrlPunctuation,
 } from "./terminalSelection";
 import type { TerminalSelectionPoint } from "./terminalSelection";
+import { collectRecentLinks, findTerminalLinks, linkAt } from "./terminalLinks";
+import type { TerminalLinkRow } from "./terminalLinks";
 import { terminalEndpointBubblePosition } from "./terminalEndpointBubblePosition";
 import { terminalLoupeCursorGeometry } from "./terminalLoupeCursorGeometry";
 import { terminalTapFocusAction } from "./terminalTapFocus";
@@ -45,7 +46,8 @@ const TOUCH_LOUPE_TARGET_OFFSET_Y_PX = 48;
 const TOUCH_ENDPOINT_HIT_WIDTH_PX = 72;
 const TOUCH_ENDPOINT_HIT_HEIGHT_PX = 72;
 const TOUCH_ENDPOINT_RING_DIAMETER_PX = 42;
-const TAP_URL_PATTERN = /\bhttps?:\/\/[^\s"'<>`]+/giu;
+const TAP_LINK_CONTEXT_ROWS = 12;
+const RECENT_LINK_ROWS = 3000;
 
 type GhosttyModule = typeof import("ghostty-web");
 
@@ -90,6 +92,8 @@ type GhosttySelectionManagerAccess = {
 };
 type TerminalBufferLine = {
   readonly length: number;
+  /** This row continues on the next row (terminal soft wrap). */
+  readonly isWrapped?: boolean;
   getCell(x: number):
     | {
         getCodepoint(): number;
@@ -122,6 +126,8 @@ export type TerminalRenderer = {
   focus(): void;
   focusTextInput(): void;
   clearSelection(): void;
+  /** Unique http(s) URLs from scrollback and screen, newest first. */
+  recentLinks(maxRows?: number): string[];
   setScrollSensitivity(value: number): void;
   dispose(): void;
 };
@@ -295,6 +301,16 @@ export class GhosttyRenderer implements TerminalRenderer {
 
   clearSelection() {
     this.#terminal?.clearSelection();
+  }
+
+  recentLinks(maxRows = RECENT_LINK_ROWS) {
+    const terminal = this.#terminal;
+    if (!terminal) {
+      return [];
+    }
+    const last = terminal.buffer.active.length - 1;
+    const { rows } = terminalLinkRows(terminal, Math.max(0, last - maxRows + 1), last);
+    return collectRecentLinks(rows, terminal.cols);
   }
 
   setScrollSensitivity(value: number) {
@@ -1468,20 +1484,36 @@ function terminalLinkAt(terminal: Terminal, position: TerminalCellPosition) {
     return terminal.wasmTerm?.getHyperlinkUri(hyperlinkId) ?? null;
   }
 
-  const { text, columns } = terminalBufferLineText(line);
-  TAP_URL_PATTERN.lastIndex = 0;
-  let match = TAP_URL_PATTERN.exec(text);
-  while (match) {
-    const rawUrl = match[0];
-    const url = trimUrlPunctuation(rawUrl);
-    const start = columns[match.index];
-    const end = columns[match.index + url.length - 1];
-    if (url.length > 8 && position.col >= start && position.col <= end) {
-      return url;
-    }
-    match = TAP_URL_PATTERN.exec(text);
+  // Join soft/hard-wrapped rows around the tap so a URL spanning rows opens whole.
+  const first = Math.max(0, row - TAP_LINK_CONTEXT_ROWS);
+  const last = row + TAP_LINK_CONTEXT_ROWS;
+  const { rows, columns } = terminalLinkRows(terminal, first, last);
+  const links = findTerminalLinks(rows, terminal.cols);
+  const rowColumns = columns[row - first];
+  if (!rowColumns) {
+    return null;
   }
-  return null;
+  const offset = rowColumns.indexOf(position.col);
+  return offset < 0 ? null : linkAt(links, row - first, offset);
+}
+
+function terminalLinkRows(terminal: Terminal, first: number, last: number) {
+  const buffer = terminal.buffer.active;
+  const rows: TerminalLinkRow[] = [];
+  const columns: number[][] = [];
+  const end = Math.min(last, buffer.length - 1);
+  for (let bufferRow = first; bufferRow <= end; bufferRow += 1) {
+    const line = buffer.getLine(bufferRow) as TerminalBufferLine | undefined;
+    if (!line) {
+      rows.push({ text: "", wrapped: false });
+      columns.push([]);
+      continue;
+    }
+    const lineText = terminalBufferLineText(line);
+    rows.push({ text: lineText.text, wrapped: line.isWrapped === true });
+    columns.push(lineText.columns);
+  }
+  return { rows, columns };
 }
 
 function terminalBufferLineText(line: TerminalBufferLine) {

@@ -3,6 +3,7 @@ import {
   ExternalLink,
   Keyboard,
   Link,
+  Link2,
   Paperclip,
   Send,
   SquareTerminal,
@@ -181,6 +182,7 @@ export function TerminalView({
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadConflict, setUploadConflict] = useState<UploadConflictState | null>(null);
+  const [pageLinks, setPageLinks] = useState<string[] | null>(null);
   const [mobileSelectionAction, setMobileSelectionAction] =
     useState<MobileSelectionAction | null>(null);
   // Read at attach time without re-running the effect (which would re-attach the socket).
@@ -1137,6 +1139,15 @@ export function TerminalView({
     void copyText(text, successMessage);
   };
 
+  const openLinksPanel = () => {
+    setMobileSelectionAction(null);
+    setPageLinks(rendererRef.current?.recentLinks() ?? []);
+  };
+
+  const copyLink = (url: string) => {
+    void copyText(url, "Copied URL");
+  };
+
   const openFilePicker = () => {
     if (!uploadDisabled) {
       fileInputRef.current?.click();
@@ -1310,6 +1321,18 @@ export function TerminalView({
           <Paperclip size={16} />
         </button>
       ) : null}
+      {!mobileControls ? (
+        <button
+          className="terminal-upload-fab terminal-links-fab"
+          type="button"
+          aria-label="Links in terminal output"
+          title="Links"
+          disabled={!pane}
+          onClick={openLinksPanel}
+        >
+          <Link2 size={16} />
+        </button>
+      ) : null}
       {mobileControls ? (
         <MobileTerminalControls
           commandInputRef={mobileCommandInputRef}
@@ -1322,6 +1345,7 @@ export function TerminalView({
           onInput={sendTerminalInput}
           onTerminalFocus={() => rendererRef.current?.focusTextInput()}
           onUpload={openFilePicker}
+          onLinks={openLinksPanel}
           onStageCommand={(command) => enqueueTerminalInput([command])}
           onSubmitCommand={(command) => enqueueTerminalInput([command, "\r"])}
         />
@@ -1333,6 +1357,13 @@ export function TerminalView({
           onCopyUrl={() => copySelectionText(mobileSelectionAction.url, "Copied URL")}
           onCopyText={() => copySelectionText(mobileSelectionAction.text, "Copied selection")}
           onClose={closeMobileSelectionActions}
+        />
+      ) : null}
+      {pageLinks ? (
+        <TerminalLinksPanel
+          urls={pageLinks}
+          onCopy={copyLink}
+          onClose={() => setPageLinks(null)}
         />
       ) : null}
       {uploadConflict ? (
@@ -1402,6 +1433,67 @@ function MobileSelectionActions({
   );
 }
 
+function TerminalLinksPanel({
+  urls,
+  onCopy,
+  onClose,
+}: {
+  urls: string[];
+  onCopy: (url: string) => void;
+  onClose: () => void;
+}) {
+  const stopInteraction = (event: { stopPropagation: () => void }) => {
+    event.stopPropagation();
+  };
+  return (
+    <div
+      className="terminal-links-panel"
+      role="dialog"
+      aria-label="Links in terminal output"
+      onPointerDown={stopInteraction}
+      onPointerUp={stopInteraction}
+      onTouchStart={stopInteraction}
+      onTouchEnd={stopInteraction}
+      onMouseDown={stopInteraction}
+      onMouseUp={stopInteraction}
+      onClick={stopInteraction}
+    >
+      <div className="terminal-links-head">
+        <span>Links</span>
+        <button type="button" className="icon-btn" aria-label="Close" title="Close" onClick={onClose}>
+          <X size={15} />
+        </button>
+      </div>
+      {urls.length === 0 ? (
+        <div className="terminal-links-empty">No links in recent output</div>
+      ) : (
+        <ul className="terminal-links-list">
+          {urls.map((url) => (
+            <li key={url} className="terminal-links-item">
+              <div className="terminal-links-url mono">{url}</div>
+              <div className="terminal-selection-actions">
+                <a
+                  className="btn btn-primary"
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <ExternalLink size={15} />
+                  Open
+                </a>
+                <button type="button" className="btn" onClick={() => onCopy(url)}>
+                  <Copy size={15} />
+                  Copy
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function MobileTerminalControls({
   commandInputRef,
   disabled,
@@ -1413,6 +1505,7 @@ function MobileTerminalControls({
   onInput,
   onTerminalFocus,
   onUpload,
+  onLinks,
   onStageCommand,
   onSubmitCommand,
 }: {
@@ -1426,6 +1519,7 @@ function MobileTerminalControls({
   onInput: (data: string) => void;
   onTerminalFocus: () => void;
   onUpload: () => void;
+  onLinks: () => void;
   onStageCommand: (command: string) => void;
   onSubmitCommand: (command: string) => void;
 }) {
@@ -1567,6 +1661,15 @@ function MobileTerminalControls({
             onClick={onUpload}
           >
             <Paperclip size={15} />
+          </button>
+          <button
+            className="term-key term-key-icon"
+            type="button"
+            aria-label="Links in terminal output"
+            title="Links"
+            onClick={onLinks}
+          >
+            <Link2 size={15} />
           </button>
           <button
             className="term-key term-key-icon"
