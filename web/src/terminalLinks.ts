@@ -148,7 +148,11 @@ export function linkAt(links: readonly TerminalLink[], row: number, offset: numb
   return null;
 }
 
-/** Unique URLs, newest (bottom-most) first. */
+/**
+ * Unique URLs, newest (bottom-most) first. A URL that is only a prefix of
+ * another listed URL is a truncated copy of it (e.g. an echoed command line
+ * that was cut at a wrap), so it is dropped.
+ */
 export function collectRecentLinks(rows: readonly TerminalLinkRow[], cols: number): string[] {
   const seen = new Set<string>();
   const urls: string[] = [];
@@ -160,5 +164,5 @@ export function collectRecentLinks(rows: readonly TerminalLinkRow[], cols: numbe
       urls.push(url);
     }
   }
-  return urls;
+  return urls.filter((url) => !urls.some((other) => other !== url && other.startsWith(url)));
 }
