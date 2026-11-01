@@ -1480,8 +1480,11 @@ function terminalLinkAt(terminal: Terminal, position: TerminalCellPosition) {
 
   const cell = line.getCell(position.col);
   const hyperlinkId = cell?.getHyperlinkId() ?? 0;
-  if (hyperlinkId > 0) {
-    return terminal.wasmTerm?.getHyperlinkUri(hyperlinkId) ?? null;
+  // ghostty-web 0.4.0 stubs getHyperlinkUri() to null, so an OSC 8 link must
+  // fall through to text detection instead of swallowing the tap.
+  const hyperlinkUri = hyperlinkId > 0 ? terminal.wasmTerm?.getHyperlinkUri(hyperlinkId) : null;
+  if (hyperlinkUri) {
+    return hyperlinkUri;
   }
 
   // Join soft/hard-wrapped rows around the tap so a URL spanning rows opens whole.
@@ -1513,7 +1516,24 @@ function terminalLinkRows(terminal: Terminal, first: number, last: number) {
     rows.push({ text: lineText.text, wrapped: line.isWrapped === true });
     columns.push(lineText.columns);
   }
+  for (let index = 0; index + 1 < rows.length; index += 1) {
+    const current = buffer.getLine(first + index) as TerminalBufferLine | undefined;
+    const next = buffer.getLine(first + index + 1) as TerminalBufferLine | undefined;
+    const endId = current ? edgeHyperlinkId(current, rows[index].text, columns[index], "end") : 0;
+    if (endId > 0 && next && edgeHyperlinkId(next, rows[index + 1].text, columns[index + 1], "start") === endId) {
+      rows[index].linkContinues = true;
+    }
+  }
   return { rows, columns };
+}
+
+/** Hyperlink id of the first or last non-blank cell of a row (0 when none). */
+function edgeHyperlinkId(line: TerminalBufferLine, text: string, columns: number[], edge: "start" | "end") {
+  const offset = edge === "end" ? text.trimEnd().length - 1 : text.length - text.trimStart().length;
+  if (offset < 0 || offset >= columns.length) {
+    return 0;
+  }
+  return line.getCell(columns[offset])?.getHyperlinkId() ?? 0;
 }
 
 function terminalBufferLineText(line: TerminalBufferLine) {

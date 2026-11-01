@@ -13,6 +13,11 @@ export type TerminalLinkRow = {
   text: string;
   /** Terminal soft-wrap flag: this row continues on the next row. */
   wrapped: boolean;
+  /**
+   * One OSC 8 hyperlink runs from this row's last non-blank cell into the next
+   * row's first non-blank cell (Claude Code tags every row of a wrapped URL).
+   */
+  linkContinues?: boolean;
 };
 
 export type TerminalLinkPart = {
@@ -80,7 +85,7 @@ function buildLink(
     if (!continuation) {
       break;
     }
-    if (!soft && !shouldJoinHardWrap(raw, current.text, nextRow.text, continuation, cols)) {
+    if (!soft && !current.linkContinues && !shouldJoinHardWrap(raw, current.text, nextRow.text, continuation, cols)) {
       break;
     }
     raw += continuation;

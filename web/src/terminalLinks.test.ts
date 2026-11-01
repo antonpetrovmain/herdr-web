@@ -32,6 +32,20 @@ describe("findTerminalLinks", () => {
     expect(links.map((l) => l.url)).toEqual([URL_200]);
   });
 
+  it("joins rows that one OSC 8 hyperlink spans even when the heuristic would not", () => {
+    // Claude Code tags each row of a wrapped URL with the same hyperlink; this row is short and ends mid-word.
+    const rows: TerminalLinkRow[] = [
+      { text: "    https://studio.example.net:8899/3d-prints", wrapped: false, linkContinues: true },
+      { text: "    travelchess/knight_v2_front.png (и отпред)", wrapped: false },
+    ];
+    expect(findTerminalLinks(rows, 80).map((l) => l.url)).toEqual([
+      "https://studio.example.net:8899/3d-printstravelchess/knight_v2_front.png",
+    ]);
+    expect(findTerminalLinks(hard(rows.map((r) => r.text)), 80).map((l) => l.url)).toEqual([
+      "https://studio.example.net:8899/3d-prints",
+    ]);
+  });
+
   it("joins a hard-wrapped URL whose rows are filled to the width", () => {
     const rows = hard([
       "  https://example.com/aaaaaaaabbbbbbbbccccc",
