@@ -11,6 +11,7 @@ const renderer = vi.hoisted(() => ({
   fit: vi.fn().mockReturnValue({ cols: 80, rows: 24 }),
   refreshMetrics: vi.fn().mockReturnValue({ cols: 80, rows: 24 }),
   clearSelection: vi.fn(),
+  visibleRows: vi.fn().mockReturnValue([]),
   setFontSize: vi.fn(),
   setScrollSensitivity: vi.fn(),
   setTapFocusHandler: vi.fn(),

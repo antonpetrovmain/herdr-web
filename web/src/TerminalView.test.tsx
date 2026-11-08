@@ -27,6 +27,10 @@ class FakeTerminalRenderer implements TerminalRenderer {
     return [];
   }
 
+  visibleRows(): string[] {
+    return [];
+  }
+
   completeMount() {
     const complete = this.pendingMountCompletion;
     if (!complete) {

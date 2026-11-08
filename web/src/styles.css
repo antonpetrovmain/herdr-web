@@ -3601,3 +3601,12 @@ button {
 .app[data-touch="true"] .terminal-stage:has(.terminal-mobile-controls) .terminal-links-panel {
   bottom: calc(var(--terminal-mobile-controls-height) + 8px * var(--mobile-controls-scale));
 }
+
+.term-option-strip .term-key-group {
+  justify-content: flex-start;
+}
+
+.term-option-key {
+  min-width: 44px;
+  border-color: var(--accent, #b4befe);
+}

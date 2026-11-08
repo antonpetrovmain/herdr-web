@@ -1,11 +1,12 @@
 import type { FitAddon, Terminal } from "ghostty-web";
 import {
   findFirstUrlInSelection,
+  joinSelectedRows,
   terminalSelectionRange,
   terminalUrlTapTarget,
 } from "./terminalSelection";
 import type { TerminalSelectionPoint } from "./terminalSelection";
-import { collectRecentLinks, findTerminalLinks, linkAt } from "./terminalLinks";
+import { collectRecentLinks, findTerminalLinks, linkAt, linkForSelection } from "./terminalLinks";
 import type { TerminalLinkRow } from "./terminalLinks";
 import { terminalEndpointBubblePosition } from "./terminalEndpointBubblePosition";
 import { terminalLoupeCursorGeometry } from "./terminalLoupeCursorGeometry";
@@ -138,7 +139,7 @@ type TerminalBufferLine = {
 };
 
 export type MobileTerminalTouchEvent =
-  | { type: "selection"; text: string }
+  | { type: "selection"; text: string; /** Full URL of a link the selection touches. */ url?: string }
   | { type: "url"; url: string };
 
 export type TerminalRenderer = {
@@ -161,6 +162,8 @@ export type TerminalRenderer = {
   clearSelection(): void;
   /** Unique http(s) URLs from scrollback and screen, newest first. */
   recentLinks(maxRows?: number): string[];
+  /** Text of the rows currently on screen (right-trimmed). */
+  visibleRows(): string[];
   setScrollSensitivity(value: number): void;
   dispose(): void;
 };
@@ -208,7 +211,7 @@ export class GhosttyRenderer implements TerminalRenderer {
       cursorBlink: this.#cursorBlink,
       fontFamily: TERMINAL_FONT_FAMILY,
       fontSize: this.#fontSizePx,
-      scrollback: 8000,
+      scrollback: coarsePointer() ? 3000 : 8000,
       smoothScrollDuration: 0,
       theme: {
         background: "#11111b",
@@ -375,6 +378,20 @@ export class GhosttyRenderer implements TerminalRenderer {
     const last = terminal.buffer.active.length - 1;
     const { rows } = terminalLinkRows(terminal, Math.max(0, last - maxRows + 1), last);
     return collectRecentLinks(rows, terminal.cols);
+  }
+
+  visibleRows() {
+    const terminal = this.#terminal;
+    if (!terminal) {
+      return [];
+    }
+    const first = terminalBufferRow(terminal, 0);
+    const rows: string[] = [];
+    for (let row = 0; row < terminal.rows; row += 1) {
+      const line = terminal.buffer.active.getLine(first + row) as TerminalBufferLine | undefined;
+      rows.push(line ? terminalBufferLineText(line).text.trimEnd() : "");
+    }
+    return rows;
   }
 
   setScrollSensitivity(value: number) {
@@ -923,7 +940,11 @@ export class GhosttyRenderer implements TerminalRenderer {
       if (selectedText.length > 0 && this.#mobileTouchSelectionHandler) {
         resetTouchSelection(false);
         terminal.textarea?.blur();
-        this.#mobileTouchSelectionHandler({ type: "selection", text: selectedText });
+        this.#mobileTouchSelectionHandler({
+          type: "selection",
+          text: selectedText,
+          url: selection ? terminalSelectionLink(terminal, selection.start, selection.end) ?? undefined : undefined,
+        });
       } else {
         resetTouchSelection(true);
         terminal.textarea?.blur();
@@ -932,6 +953,8 @@ export class GhosttyRenderer implements TerminalRenderer {
     const completeSimpleTouchSelection = (event: TouchEvent) => {
       preventTouchEvent(event);
       suppressMouseEvents();
+      const selStart = simpleSelectionStart ?? { col: 0, row: 0 };
+      const selEnd = simpleSelectionEnd ?? selStart;
       const selectedText =
         simpleSelectionStart && simpleSelectionEnd
           ? terminalSelectedTextFromViewportRange(terminal, simpleSelectionStart, simpleSelectionEnd)
@@ -939,8 +962,9 @@ export class GhosttyRenderer implements TerminalRenderer {
       stopSimpleTouchSelection();
       terminal.textarea?.blur();
       if (selectedText.trim() && this.#mobileTouchSelectionHandler) {
-        this.#mobileTouchSelectionHandler({ type: "selection", text: selectedText });
-        if (!findFirstUrlInSelection(selectedText.trim())) {
+        const selectionUrl = terminalSelectionLink(terminal, selStart, selEnd) ?? undefined;
+        this.#mobileTouchSelectionHandler({ type: "selection", text: selectedText, url: selectionUrl });
+        if (!selectionUrl && !findFirstUrlInSelection(selectedText.trim())) {
           clearSelectionClearTimer();
           selectionClearTimer = window.setTimeout(() => {
             selectionClearTimer = null;
@@ -1859,7 +1883,12 @@ function terminalSelectedTextFromViewportRange(
 ) {
   const range = terminalSelectionRange(start, end, terminal.cols);
 
+  const firstBufferRow = terminalBufferRow(terminal, range.from.row);
+  const lastBufferRow = terminalBufferRow(terminal, range.to.row);
+  // Context row after the selection decides whether its last row joins on.
+  const { rows: linkRows } = terminalLinkRows(terminal, firstBufferRow, lastBufferRow + 1);
   const selectedLines: string[] = [];
+  const joinWithNext: boolean[] = [];
   for (let row = range.from.row; row <= range.to.row; row += 1) {
     const bufferRow = terminalBufferRow(terminal, row);
     const line = terminal.buffer.active.getLine(bufferRow) as TerminalBufferLine | undefined;
@@ -1872,11 +1901,32 @@ function terminalSelectedTextFromViewportRange(
             startCol,
             endCol,
             terminalGraphemeReader(terminal, bufferRow),
-          ).trimEnd()
+          )
         : "",
     );
+    const linkRow = linkRows[bufferRow - firstBufferRow];
+    joinWithNext.push(linkRow ? linkRow.wrapped || linkRow.linkContinues === true : false);
   }
-  return selectedLines.join("\n");
+  return joinSelectedRows(selectedLines, joinWithNext);
+}
+
+/** Whole URL of a link touched by a viewport selection (wrapped rows joined). */
+function terminalSelectionLink(
+  terminal: Terminal,
+  start: TerminalSelectionPoint,
+  end: TerminalSelectionPoint,
+) {
+  const range = terminalSelectionRange(start, end, terminal.cols);
+  const first = Math.max(0, terminalBufferRow(terminal, range.from.row) - TAP_LINK_CONTEXT_ROWS);
+  const last = terminalBufferRow(terminal, range.to.row) + TAP_LINK_CONTEXT_ROWS;
+  const { rows, columns } = terminalLinkRows(terminal, first, last);
+  const links = findTerminalLinks(rows, terminal.cols);
+  return linkForSelection(
+    links,
+    columns,
+    { row: terminalBufferRow(terminal, range.from.row) - first, col: range.from.col },
+    { row: terminalBufferRow(terminal, range.to.row) - first, col: range.to.col },
+  );
 }
 
 // Cells holding multi-codepoint grapheme clusters (combining marks, emoji with
@@ -2029,4 +2079,9 @@ function normalizeWheelLines(event: WheelEvent, rows: number, sensitivity: numbe
     return rawLines < 0 ? -1 : rawLines > 0 ? 1 : 0;
   }
   return rawLines < 0 ? Math.ceil(rawLines) : Math.floor(rawLines);
+}
+
+/** Phones get a smaller scrollback: the wasm buffer is the main memory cost of a long session. */
+function coarsePointer() {
+  return typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true;
 }

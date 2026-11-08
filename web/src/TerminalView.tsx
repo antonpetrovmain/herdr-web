@@ -8,12 +8,13 @@ import {
   Link2,
   Paperclip,
   Plus,
+  Quote,
   Send,
   SquareTerminal,
   TextCursorInput,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { ChangeEvent, ClipboardEvent, DragEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { autosizeMobileCommandTextarea } from "./mobileCommandTextarea";
 import {
@@ -42,6 +43,7 @@ import {
   normalizeMobileTerminalCopyText,
   openableHttpUrl,
 } from "./terminalSelection";
+import { detectNumberedOptions } from "./terminalOptions";
 import { GhosttyRenderer } from "./terminalRenderer";
 import type { MobileTerminalTouchEvent, TerminalRenderer, TerminalSize } from "./terminalRenderer";
 import {
@@ -142,6 +144,29 @@ type UploadConflictState = {
   path: string;
   resolve: (replace: boolean) => void;
 };
+// The last text picked on the phone, kept across pane switches so it can be quoted
+// into another pane's command input (e.g. a side agent's answer into the main chat).
+let quotedSelection: string | null = null;
+const quoteListeners = new Set<() => void>();
+function setQuotedSelection(text: string | null) {
+  quotedSelection = text;
+  for (const listener of quoteListeners) {
+    listener();
+  }
+}
+function subscribeQuote(listener: () => void) {
+  quoteListeners.add(listener);
+  return () => {
+    quoteListeners.delete(listener);
+  };
+}
+export function quoteForInput(text: string) {
+  return text
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
 type MobileSelectionAction = {
   text: string;
   url: string;
@@ -235,6 +260,7 @@ export function TerminalView({
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadConflict, setUploadConflict] = useState<UploadConflictState | null>(null);
+  const [optionCount, setOptionCount] = useState<number | null>(null);
   const [pageLinks, setPageLinks] = useState<string[] | null>(null);
   const [mobileSelectionAction, setMobileSelectionAction] =
     useState<MobileSelectionAction | null>(null);
@@ -344,13 +370,16 @@ export function TerminalView({
         rendererRef.current?.clearSelection();
         return;
       }
-      const url = findFirstUrlInSelection(copiedText);
+      // The renderer resolves the whole URL when the selection touches a wrapped link.
+      const url = event.url ?? findFirstUrlInSelection(copiedText);
       if (url) {
         setMobileSelectionAction({ text: copiedText, url });
+        setQuotedSelection(copiedText);
         return;
       }
       rendererRef.current?.clearSelection();
-      void copyText(copiedText, "Copied selection");
+      setQuotedSelection(copiedText);
+      void copyText(copiedText, "Copied selection (Quote button inserts it)");
     },
     [copyText],
   );
@@ -1229,6 +1258,22 @@ export function TerminalView({
     };
   }, [mobileControls, pane?.terminal_id, rendererReady, resizeTerminal]);
 
+  // Watch the screen for a numbered option dialog so the phone can offer 1-N / arrows / Enter keys.
+  useEffect(() => {
+    if (!mobileControls || !pane) {
+      setOptionCount(null);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      const rows = rendererRef.current?.visibleRows() ?? [];
+      setOptionCount(detectNumberedOptions(rows));
+    }, 700);
+    return () => {
+      window.clearInterval(timer);
+      setOptionCount(null);
+    };
+  }, [mobileControls, pane?.terminal_id]);
+
   const uploadDisabled = !pane || uploading;
 
   const closeMobileSelectionActions = () => {
@@ -1487,6 +1532,7 @@ export function TerminalView({
           onTerminalFocus={() => rendererRef.current?.focusTextInput()}
           onUpload={openFilePicker}
           onLinks={openLinksPanel}
+          optionCount={optionCount}
           onStageCommand={(command) => enqueueTerminalInput([command])}
           onSubmitCommand={(command) => enqueueTerminalInput([command, "\r"])}
         />
@@ -1566,6 +1612,10 @@ function MobileSelectionActions({
             Copy text
           </button>
         ) : null}
+        <button type="button" className="btn" onClick={onClose}>
+          <Quote size={15} />
+          Quote
+        </button>
         <button type="button" className="icon-btn" aria-label="Close" title="Close" onClick={onClose}>
           <X size={15} />
         </button>
@@ -1657,6 +1707,7 @@ export function TerminalCommandControls({
   controlsScalePercent,
   onControlsHeightChange,
   onInput,
+  optionCount,
   onTerminalFocus,
   onUpload,
   onLinks,
@@ -1675,6 +1726,7 @@ export function TerminalCommandControls({
   controlsScalePercent: number;
   onControlsHeightChange: (heightPx: number | null) => void;
   onInput: (data: string) => void;
+  optionCount: number | null;
   onTerminalFocus: () => void;
   onUpload: () => void;
   onLinks: () => void;
@@ -1683,6 +1735,15 @@ export function TerminalCommandControls({
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [value, setValue] = useCommandDraft(bridgeId, paneId);
+  const quote = useSyncExternalStore(subscribeQuote, () => quotedSelection);
+  const insertQuote = () => {
+    if (!quote) {
+      return;
+    }
+    setValue(`${value}${value && !value.endsWith("\n") ? "\n" : ""}${quoteForInput(quote)}\n`);
+    setQuotedSelection(null);
+    window.setTimeout(() => commandInputRef.current?.focus(), 0);
+  };
   // Keep this deadline outside the keyed field so it survives input replacement.
   const compositionGuardUntilRef = useRef(0);
   const acceptedValueRef = useRef(value);
@@ -1975,6 +2036,21 @@ export function TerminalCommandControls({
         </div>
       </div>
 
+      {mobileControls && optionCount ? (
+        <div className="term-key-strip term-option-strip" role="group" aria-label="Option dialog keys">
+          <div className="term-key-group">
+            {Array.from({ length: optionCount }, (_, index) => String(index + 1)).map((digit) => (
+              <button key={digit} className="term-key term-option-key" type="button" disabled={disabled}
+                onClick={() => onInput(digit)}>{digit}</button>
+            ))}
+            <button className="term-key" type="button" disabled={disabled} onClick={() => onInput("\x1B[A")}>↑</button>
+            <button className="term-key" type="button" disabled={disabled} onClick={() => onInput("\x1B[B")}>↓</button>
+            <button className="term-key term-option-key" type="button" disabled={disabled} onClick={() => onInput("\r")}>Enter</button>
+            <button className="term-key" type="button" disabled={disabled} onClick={() => onInput("\x1B")}>Esc</button>
+          </div>
+        </div>
+      ) : null}
+
       {mobileControls && moreKeysOpen ? (
         <div className="term-key-direct-row" role="group" aria-label="Direct terminal keys">
           {DIRECT_TERMINAL_KEYS.map((key) => renderSharedKey(key, key.id !== "enter"))}
@@ -2116,6 +2192,12 @@ export function TerminalCommandControls({
             onChange={onCommandChange}
           />
         )}
+        {quote ? (
+          <button className="term-send" type="button" aria-label="Insert quoted selection"
+            title="Quote selection into input" onClick={insertQuote}>
+            <Quote size={16} />
+          </button>
+        ) : null}
         {!mobileControls ? stageCommandButton : null}
         <button
           className="term-send"

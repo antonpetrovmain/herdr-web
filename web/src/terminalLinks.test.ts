@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectRecentLinks, findTerminalLinks, linkAt } from "./terminalLinks";
+import { collectRecentLinks, findTerminalLinks, linkAt, linkForSelection } from "./terminalLinks";
 import type { TerminalLinkRow } from "./terminalLinks";
 
 const URL_200 =
@@ -123,5 +123,32 @@ describe("collectRecentLinks", () => {
   it("drops a URL that is a truncated prefix of another listed URL", () => {
     const rows = hard(["https://example.org/a/b/seg", "x", "https://example.org/a/b/segment-three"]);
     expect(collectRecentLinks(rows, 80)).toEqual(["https://example.org/a/b/segment-three"]);
+  });
+});
+
+describe("linkForSelection", () => {
+  const rows = [
+    { text: "see https://example.com/aa", wrapped: true },
+    { text: "bbccdd/eeff", wrapped: false },
+    { text: "other", wrapped: false },
+  ];
+  const columns = rows.map((row) => Array.from({ length: row.text.length }, (_, i) => i));
+  const links = findTerminalLinks(rows, 26);
+
+  it("returns the whole URL for a selection on only its second row", () => {
+    expect(linkForSelection(links, columns, { row: 1, col: 2 }, { row: 1, col: 4 })).toBe(
+      "https://example.com/aabbccdd/eeff",
+    );
+  });
+
+  it("returns the whole URL for a selection on only its first row", () => {
+    expect(linkForSelection(links, columns, { row: 0, col: 8 }, { row: 0, col: 10 })).toBe(
+      "https://example.com/aabbccdd/eeff",
+    );
+  });
+
+  it("ignores selections that miss the link", () => {
+    expect(linkForSelection(links, columns, { row: 0, col: 0 }, { row: 0, col: 3 })).toBeNull();
+    expect(linkForSelection(links, columns, { row: 2, col: 0 }, { row: 2, col: 4 })).toBeNull();
   });
 });

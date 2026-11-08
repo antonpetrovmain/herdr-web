@@ -392,6 +392,7 @@ describe("TerminalCommandControls", () => {
       "Upload file",
       "Stage command in terminal",
       "Show more keys",
+      "Links in terminal output",
       "Focus terminal keyboard",
     ]);
     expect(actions.textContent?.trim()).toBe("");
