@@ -23,6 +23,10 @@ class FakeTerminalRenderer implements TerminalRenderer {
     });
   }
 
+  recentLinks(): string[] {
+    return [];
+  }
+
   completeMount() {
     const complete = this.pendingMountCompletion;
     if (!complete) {
