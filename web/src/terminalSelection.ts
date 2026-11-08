@@ -42,6 +42,24 @@ export function selectedTextFromVisibleRows(
   return selectedLines.join("\n");
 }
 
+/**
+ * Joins selected terminal rows. A row that soft-wraps (or is tagged by the same
+ * OSC 8 hyperlink as the next one) continues on the next row, so no newline is
+ * inserted there and its trailing cells are kept; other rows are right-trimmed.
+ */
+export function joinSelectedRows(rows: readonly string[], joinWithNext: readonly boolean[]) {
+  let text = "";
+  for (let index = 0; index < rows.length; index += 1) {
+    const joined = index < rows.length - 1 && joinWithNext[index] === true;
+    const row = joined ? rows[index] : rows[index].trimEnd();
+    text += row;
+    if (index < rows.length - 1 && !joined) {
+      text += "\n";
+    }
+  }
+  return text;
+}
+
 export function findFirstUrlInSelection(selection: string) {
   const lines = selection
     .replace(/\r\n?/gu, "\n")

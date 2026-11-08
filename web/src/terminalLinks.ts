@@ -171,3 +171,34 @@ export function collectRecentLinks(rows: readonly TerminalLinkRow[], cols: numbe
   }
   return urls.filter((url) => !urls.some((other) => other !== url && other.startsWith(url)));
 }
+
+/**
+ * The URL of the first link that has a character inside the selection, so a
+ * selection that covers only part of a wrapped URL still yields the whole URL.
+ * `columns[row]` maps each text offset of that row to its terminal column.
+ * Rows are indexes into the same array the links were found in.
+ */
+export function linkForSelection(
+  links: readonly TerminalLink[],
+  columns: readonly (readonly number[])[],
+  from: { row: number; col: number },
+  to: { row: number; col: number },
+): string | null {
+  for (const link of links) {
+    for (const part of link.parts) {
+      if (part.row < from.row || part.row > to.row) {
+        continue;
+      }
+      const startCol = part.row === from.row ? from.col : 0;
+      const endCol = part.row === to.row ? to.col : Number.POSITIVE_INFINITY;
+      const rowColumns = columns[part.row] ?? [];
+      for (let offset = part.start; offset < part.end; offset += 1) {
+        const col = rowColumns[offset];
+        if (col !== undefined && col >= startCol && col <= endCol) {
+          return link.url;
+        }
+      }
+    }
+  }
+  return null;
+}

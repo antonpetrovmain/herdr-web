@@ -105,3 +105,17 @@ describe("terminal selection helpers", () => {
     );
   });
 });
+
+describe("joinSelectedRows", () => {
+  it("joins soft-wrapped and hyperlink-continued rows without a newline", async () => {
+    const { joinSelectedRows } = await import("./terminalSelection");
+    expect(
+      joinSelectedRows(["https://example.com/ab", "cdef/ghi  ", "next line"], [true, false, false]),
+    ).toBe("https://example.com/abcdef/ghi\nnext line");
+  });
+
+  it("keeps a trailing space on a row that continues", async () => {
+    const { joinSelectedRows } = await import("./terminalSelection");
+    expect(joinSelectedRows(["foo ", "bar"], [true, false])).toBe("foo bar");
+  });
+});

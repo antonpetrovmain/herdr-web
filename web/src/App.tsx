@@ -7534,6 +7534,10 @@ function isTouchInputViewport() {
   if (typeof window === "undefined") {
     return false;
   }
+  // Localhost-only switch so the phone layout can be exercised from a desktop browser.
+  if (window.location.hostname === "localhost" && window.location.search.includes("forcetouch")) {
+    return true;
+  }
   return window.matchMedia(TOUCH_INPUT_QUERY).matches || navigator.maxTouchPoints > 0;
 }
 
