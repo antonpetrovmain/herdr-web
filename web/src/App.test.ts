@@ -40,6 +40,7 @@ import {
   sortScopedAgentPanes,
   stableBridgeRefreshOffsetMs,
   updateCollapsedSidebarGroups,
+  officeName,
 } from "./App";
 import type { BridgeConnectionRef, BridgeConnectionView } from "./App";
 import type { BridgeRuntime } from "./bridge";
@@ -2120,3 +2121,17 @@ function note(
         : undefined,
   };
 }
+
+describe("officeName", () => {
+  const pane = (extra: Record<string, unknown>) => ({ pane_id: "p", agent_status: "idle", ...extra }) as never;
+  it("uses the fleet name when herdr reports one", () => {
+    expect(officeName(pane({ agent: "claude", display_agent: "chess", cwd: "/Users/x/agents/chess" }))).toBe("chess");
+  });
+  it("skips a display_agent that is only the program name, preferring the herdr label", () => {
+    expect(officeName(pane({ agent: "claude", display_agent: "claude", label: "scratch", cwd: "/tmp/w" }))).toBe("scratch");
+  });
+  it("falls back to the cwd basename", () => {
+    expect(officeName(pane({ agent: "qwen", display_agent: "qwen", cwd: "/Users/x/agents/abliterated" }))).toBe("abliterated");
+    expect(officeName(pane({ agent: "claude", foreground_cwd: "/Users/x/agents/vim", cwd: "/" }))).toBe("vim");
+  });
+});

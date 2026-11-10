@@ -3006,7 +3006,7 @@ function AppContent({ commandDrafts }: { commandDrafts: ReturnType<typeof create
     return buildOfficeEntries(
       rows.map((entry) => ({
         key: `${entry.bridgeId}:${entry.pane.pane_id}`,
-        name: agentTitle(entry.pane),
+        name: officeName(entry.pane),
         status: entry.pane.agent_status,
         ref: entry,
       })),
@@ -9539,6 +9539,13 @@ function compareLastStatusTransition(a: ScopedAgentPane, b: ScopedAgentPane) {
     return bTransition - aTransition;
   }
   return 0;
+}
+
+/** Office label: the fleet name. herdr reports unnamed panes with display_agent = the program ("claude", "qwen"),
+ * so a display_agent equal to the agent type is skipped in favour of the herdr label, then the cwd basename. */
+export function officeName(pane: PaneInfo) {
+  const named = pane.display_agent && pane.display_agent !== pane.agent ? pane.display_agent : "";
+  return named || pane.label || basename(pane.foreground_cwd || pane.cwd) || agentTitle(pane);
 }
 
 function agentTitle(pane: PaneInfo) {
