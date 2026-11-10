@@ -7366,16 +7366,6 @@ function Switcher({
         <button
           className="icon-btn"
           type="button"
-          aria-label="Office"
-          title="Office: agent status (Alt+Shift+O)"
-          aria-pressed={officeOpen}
-          onClick={onToggleOffice}
-        >
-          <Building2 size={16} />
-        </button>
-        <button
-          className="icon-btn"
-          type="button"
           aria-label="Settings"
           title={`Settings; bridge: ${bridgeLabel}`}
           data-spin={capabilityState === "probing" ? "" : undefined}
@@ -7644,6 +7634,17 @@ function Switcher({
                     <Plus size={14} />
                   </button>
                 ) : null}
+                <button
+                  className="sec-add"
+                  type="button"
+                  aria-label="Office"
+                  title="Office: agent status (Alt+Shift+O)"
+                  aria-pressed={officeOpen}
+                  data-on={officeOpen}
+                  onClick={onToggleOffice}
+                >
+                  <Building2 size={13} />
+                </button>
                 {showPinnedOnlyControl ? (
                   <button
                     className="sec-add"
