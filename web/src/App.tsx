@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Building2,
   Link2,
   ListCollapse,
   ListRestart,
@@ -55,6 +56,13 @@ import {
   supportsAgentActivity,
 } from "./agentActivity";
 import type { AgentActivityListResponse } from "./agentActivity";
+import { OfficeStrip } from "./Office";
+import {
+  buildOfficeEntries,
+  isOfficeShortcut,
+  readOfficeOpen,
+  writeOfficeOpen,
+} from "./officePrefs";
 import {
   agentPinKey,
   agentPinKeys,
@@ -1027,6 +1035,7 @@ function AppContent({ commandDrafts }: { commandDrafts: ReturnType<typeof create
   const [hostScope, setHostScope] = useState<HostScope>(initialPrefs.hostScope);
   const [scope, setScope] = useState<Scope>(initialPrefs.scope);
   const [sidebarView, setSidebarView] = useState<SidebarView>(initialPrefs.sidebarView);
+  const [officeOpen, setOfficeOpen] = useState(readOfficeOpen);
   const [agentSort, setAgentSort] = useState<AgentSort>(initialPrefs.agentSort);
   const [agentGroup, setAgentGroup] = useState<AgentGroup>(initialPrefs.agentGroup);
   const [combineMatchingWorkspaceNames, setCombineMatchingWorkspaceNames] = useState(
@@ -2951,6 +2960,66 @@ function AppContent({ commandDrafts }: { commandDrafts: ReturnType<typeof create
     }
   };
 
+  const toggleOffice = useCallback(() => {
+    setOfficeOpen((open) => {
+      writeOfficeOpen(!open);
+      return !open;
+    });
+  }, []);
+  const closeOffice = useCallback(() => {
+    setOfficeOpen(false);
+    writeOfficeOpen(false);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isOfficeShortcut(event) || isShortcutTextEntryTarget(event.target) || hasOpenModal()) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      toggleOffice();
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [toggleOffice]);
+
+  const officeEntries = useMemo(() => {
+    if (!officeOpen) {
+      return [];
+    }
+    const rows = buildVisibleAgentPaneEntries(
+      buildVisibleScopedWorkspaces(
+        bridgeViews,
+        selectedRuntime?.id ?? null,
+        "all",
+        "all",
+        activeSpace,
+        activeWorkspacesByBridgeId,
+        multiHostSpaceSelection,
+      ),
+      bridgeViews,
+      "all",
+      "none",
+      "workspace",
+    );
+    return buildOfficeEntries(
+      rows.map((entry) => ({
+        key: `${entry.bridgeId}:${entry.pane.pane_id}`,
+        name: agentTitle(entry.pane),
+        status: entry.pane.agent_status,
+        ref: entry,
+      })),
+    );
+  }, [
+    activeSpace,
+    activeWorkspacesByBridgeId,
+    bridgeViews,
+    multiHostSpaceSelection,
+    officeOpen,
+    selectedRuntime,
+  ]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const navigationShortcut = isAppNavigationShortcut(event);
@@ -3934,6 +4003,8 @@ function AppContent({ commandDrafts }: { commandDrafts: ReturnType<typeof create
             }
           }}
           onBackendSettings={() => setBackendSettingsOpen(true)}
+          officeOpen={officeOpen}
+          onToggleOffice={toggleOffice}
           onCreateSpace={() =>
             selectedRuntime && selectedCommands
               ? void exec(
@@ -4221,6 +4292,19 @@ function AppContent({ commandDrafts }: { commandDrafts: ReturnType<typeof create
           <div className="terminal-stage" aria-hidden="true" />
         )}
       </section>
+
+      {officeOpen ? (
+        <OfficeStrip
+          entries={officeEntries}
+          onClose={closeOffice}
+          onSelect={(entry) => {
+            focusPane(entry.bridgeId, entry.pane);
+            if (isCompactLayout) {
+              closeOffice();
+            }
+          }}
+        />
+      ) : null}
 
       {notesPanelOpen && notesEnabled ? (
         <NotesSurface
@@ -6157,6 +6241,8 @@ function Switcher({
   onRefresh,
   onRefreshBridge,
   onBackendSettings,
+  officeOpen,
+  onToggleOffice,
   onCreateSpace,
   onCreateTab,
   onScopedMenu,
@@ -6220,6 +6306,8 @@ function Switcher({
   onRefresh: () => void;
   onRefreshBridge: (bridgeId: BridgeId) => void;
   onBackendSettings: () => void;
+  officeOpen: boolean;
+  onToggleOffice: () => void;
   onCreateSpace: () => void;
   onCreateTab: (bridgeId: BridgeId, workspaceId: string) => void;
   onScopedMenu: (
@@ -7275,6 +7363,16 @@ function Switcher({
             <span className="brand-sub">{bridgeLabel}</span>
           ) : null}
         </div>
+        <button
+          className="icon-btn"
+          type="button"
+          aria-label="Office"
+          title="Office: agent status (Alt+Shift+O)"
+          aria-pressed={officeOpen}
+          onClick={onToggleOffice}
+        >
+          <Building2 size={16} />
+        </button>
         <button
           className="icon-btn"
           type="button"
